@@ -1,0 +1,369 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Arthiq</title>
+<style>
+:root{--navy:#002f6c;--cyan:#00b9f5;--bg:#f2f5f9;--card:#fff;--ink:#1a2433;--mut:#6b7a90}
+@media (prefers-color-scheme: dark){:root{--bg:#0e1522;--card:#17202f;--ink:#e8eef7;--mut:#8fa0b8}}
+*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,"Segoe UI",sans-serif;background:var(--bg);color:var(--ink)}
+header{background:var(--navy);color:#fff;padding:12px 16px;display:flex;justify-content:space-between;align-items:center}
+header h1{margin:0;font-size:20px;letter-spacing:1px}
+header button{background:transparent;border:1px solid #fff8;color:#fff;border-radius:8px;padding:6px 12px;cursor:pointer;font-size:15px}
+main{max-width:980px;margin:0 auto;padding:16px;display:grid;gap:16px;grid-template-columns:1fr}
+@media(min-width:800px){main{grid-template-columns:1.2fr 1fr}}
+.card{background:var(--card);border-radius:14px;padding:16px;box-shadow:0 1px 3px #0003}
+.card h2{margin:0 0 8px;font-size:15px;color:var(--mut);font-weight:600}
+#mic{width:88px;height:88px;border-radius:50%;border:0;background:var(--cyan);color:#fff;font-size:36px;cursor:pointer;display:block;margin:8px auto}
+#mic.rec{background:#e5484d;animation:pulse 1s infinite}
+@keyframes pulse{50%{box-shadow:0 0 0 14px #e5484d33}}
+#status{text-align:center;color:var(--mut);min-height:22px}
+#log{max-height:330px;overflow:auto;display:flex;flex-direction:column;gap:8px;margin-top:10px}
+.msg{padding:8px 12px;border-radius:12px;max-width:92%;line-height:1.4}
+.you{background:#e6f4fd;color:#06304f;align-self:flex-end}
+.bot{background:var(--navy);color:#fff;align-self:flex-start}
+.bot.error{background:#a4262c}.bot.saved{background:#1b7f4b}.bot.ask{background:#8a5a00}
+#yn{display:none;gap:10px;justify-content:center;margin-top:10px}
+#yn button{padding:8px 22px;border-radius:10px;border:0;font-size:15px;cursor:pointer;color:#fff}
+#yes{background:#1b7f4b}#no{background:#a4262c}
+.row{display:flex;gap:8px;margin-top:12px}
+.row input{flex:1;padding:8px 10px;border-radius:8px;border:1px solid #8884;background:var(--bg);color:var(--ink)}
+.row button{padding:8px 14px;border-radius:8px;border:0;background:var(--navy);color:#fff;cursor:pointer}
+table{width:100%;border-collapse:collapse}
+td{padding:6px 4px;border-bottom:1px solid #8883;font-size:14px}
+td:last-child{text-align:right;font-variant-numeric:tabular-nums}
+tr.warn td{color:#d9480f;font-weight:600}
+#overlay{position:fixed;inset:0;background:var(--navy);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;z-index:10;padding:20px;overflow:auto}
+#overlay h2{color:#fff;margin:0;font-size:24px;text-align:center}
+#overlay p{color:#9fc4ee;margin:0}
+#langGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;max-width:640px;width:100%}
+.lang{background:#ffffff14;border:1px solid #ffffff44;color:#fff;border-radius:12px;padding:14px 8px;cursor:pointer;display:flex;flex-direction:column;gap:4px;align-items:center}
+.lang:hover{background:var(--cyan)}.lang strong{font-size:20px}.lang span{font-size:12px;opacity:.8}
+</style>
+</head>
+<body>
+<div id="overlay">
+  <h2>Arthiq<br>Choose your language / अपनी भाषा चुनें</h2>
+  <p>Speak and listen in this language</p>
+  <div id="langGrid"></div>
+</div>
+
+<header>
+  <h1>ARTHIQ</h1>
+  <div><button id="resetBtn">Reset</button> <button id="langBtn">Language</button></div>
+</header>
+
+<main>
+  <section class="card">
+    <h2>Talk to Arthiq</h2>
+    <button id="mic" aria-label="Microphone">🎤</button>
+    <div id="status">Choose a language to begin</div>
+    <div id="yn"><button id="yes">Yes</button><button id="no">No</button></div>
+    <div id="log"></div>
+    <div class="row"><input id="txt" placeholder="Or type here (for testing)"><button id="send">Send</button></div>
+  </section>
+  <section>
+    <div class="card"><h2>Customer balances (₹)</h2><table><tbody id="ledger"></tbody></table></div>
+    <div class="card" style="margin-top:16px"><h2>Stock</h2><table><tbody id="stock"></tbody></table></div>
+  </section>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+const SHOP = 1;
+let rec = null, chunks = [], stream = null, timer = null;
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+const postJSON = (path, body) => api(path, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+const setStatus = t => { $('#status').textContent = t; };
+
+async function init() {
+  try {
+    const langs = await api('/languages');
+    langs.forEach(l => {
+      const b = document.createElement('button');
+      b.className = 'lang';
+      const a = document.createElement('strong'); a.textContent = l.native;
+      const n = document.createElement('span'); n.textContent = l.name;
+      b.append(a, n);
+      b.onclick = () => chooseLang(l);
+      $('#langGrid').append(b);
+    });
+  } catch (e) {
+    $('#langGrid').textContent = 'Could not load languages: ' + (e.message || e);
+    $('#langGrid').style.color = '#fff';
+  }
+  refresh();
+}
+
+async function chooseLang(l) {
+  await postJSON('/shop/language', {shop_id: SHOP, language: l.code});
+  $('#langBtn').textContent = l.native + ' ▾';
+  $('#overlay').style.display = 'none';
+  setStatus('Tap the mic and speak');
+}
+
+function addMsg(cls, text) {
+  const d = document.createElement('div');
+  d.className = 'msg ' + cls; d.textContent = text;
+  $('#log').append(d); $('#log').scrollTop = 1e9;
+}
+
+async function show(res) {
+  if (res.transcript) addMsg('you', res.transcript);
+  addMsg('bot ' + res.state, res.reply);
+  $('#yn').style.display = res.state === 'confirm' ? 'flex' : 'none';
+  setStatus(res.state === 'confirm' ? 'Say yes or no (or tap a button)' : 'Tap the mic and speak');
+  if (res.audio_b64) {
+    try { await new Audio('data:audio/wav;base64,' + res.audio_b64).play(); } catch (e) {}
+  }
+  refresh();
+}
+
+// ---- recording: MediaRecorder -> decode -> 16 kHz mono WAV ----
+async function toWav16k(blob) {
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  const decoded = await ctx.decodeAudioData(await blob.arrayBuffer());
+  ctx.close();
+  const off = new OfflineAudioContext(1, Math.ceil(decoded.duration * 16000), 16000);
+  const src = off.createBufferSource();
+  src.buffer = decoded; src.connect(off.destination); src.start();
+  const pcm = (await off.startRendering()).getChannelData(0);
+  return encodeWav(pcm, 16000);
+}
+function encodeWav(samples, rate) {
+  const buf = new ArrayBuffer(44 + samples.length * 2), v = new DataView(buf);
+  const w = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+  w(0, 'RIFF'); v.setUint32(4, 36 + samples.length * 2, true); w(8, 'WAVE'); w(12, 'fmt ');
+  v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, rate, true); v.setUint32(28, rate * 2, true); v.setUint16(32, 2, true);
+  v.setUint16(34, 16, true); w(36, 'data'); v.setUint32(40, samples.length * 2, true);
+  let o = 44;
+  for (const s of samples) { const x = Math.max(-1, Math.min(1, s)); v.setInt16(o, x < 0 ? x * 0x8000 : x * 0x7FFF, true); o += 2; }
+  return new Blob([buf], {type: 'audio/wav'});
+}
+
+async function toggleMic() {
+  if (rec && rec.state === 'recording') { rec.stop(); return; }
+  try { stream = await navigator.mediaDevices.getUserMedia({audio: true}); }
+  catch (e) { setStatus('Microphone blocked. Allow it in the browser.'); return; }
+  chunks = [];
+  rec = new MediaRecorder(stream);
+  rec.ondataavailable = e => chunks.push(e.data);
+  rec.onstop = onStop;
+  rec.start();
+  $('#mic').classList.add('rec');
+  setStatus('Listening… tap again to stop');
+  timer = setTimeout(() => { if (rec.state === 'recording') rec.stop(); }, 25000);  // STT limit is 30 s
+}
+
+async function onStop() {
+  clearTimeout(timer);
+  stream.getTracks().forEach(t => t.stop());
+  $('#mic').classList.remove('rec');
+  setStatus('Understanding…');
+  try {
+    const wav = await toWav16k(new Blob(chunks));
+    if (wav.size < 8000) { setStatus('Too short. Please try again.'); return; }
+    const fd = new FormData();
+    fd.append('audio', wav, 'speech.wav'); fd.append('shop_id', SHOP);
+    show(await api('/voice/turn', {method: 'POST', body: fd}));
+  } catch (e) { setStatus('Error: ' + e.message); }
+}
+
+async function sendText(t) {
+  if (!t.trim()) return;
+  setStatus('Thinking…');
+  try { show(await postJSON('/text/turn', {shop_id: SHOP, text: t})); }
+  catch (e) { setStatus('Error: ' + e.message); }
+}
+
+function row(cells, warn) {
+  const tr = document.createElement('tr');
+  if (warn) tr.className = 'warn';
+  cells.forEach(c => { const td = document.createElement('td'); td.textContent = c; tr.append(td); });
+  return tr;
+}
+async function refresh() {
+  try {
+    const [led, stk] = await Promise.all([api('/ledger?shop_id=' + SHOP), api('/stock?shop_id=' + SHOP)]);
+    $('#ledger').replaceChildren(...led.map(c => row([c.name, '₹' + c.balance])));
+    $('#stock').replaceChildren(...stk.map(i => row([i.name, i.stock_qty + ' ' + i.unit], i.stock_qty <= i.reorder_level)));
+  } catch (e) {
+    console.error('refresh failed', e);
+    setStatus('Could not load balances/stock: ' + (e.message || e).toString().slice(0, 120));
+  }
+}
+
+$('#mic').onclick = toggleMic;
+$('#send').onclick = () => { sendText($('#txt').value); $('#txt').value = ''; };
+$('#txt').onkeydown = e => { if (e.key === 'Enter') $('#send').click(); };
+$('#yes').onclick = () => sendText('yes');
+$('#no').onclick = () => sendText('no');
+$('#langBtn').onclick = () => { $('#overlay').style.display = 'flex'; };
+$('#resetBtn').onclick = async () => { await api('/session/reset', {method: 'POST'}); $('#yn').style.display = 'none'; setStatus('Conversation reset'); };
+init();
+</script>
+
+<script>
+/* ===== Hands-free spoken confirmation ===== */
+(function () {
+  const START_TIMEOUT_MS = 8000;   // wait this long for the shopkeeper to start speaking
+  const SILENCE_MS = 1200;         // silence that ends an answer
+  const MAX_MS = 15000;            // hard cap (Sarvam STT limit is 30 s)
+  const S = { on: true, stream: null, listening: false, cancel: null, finish: null, userCancelled: false };
+  try { S.on = localStorage.getItem('arthiq_handsfree') !== 'off'; } catch (e) {}
+  const q = s => document.querySelector(s);
+
+  // remember the bot's <audio> so we can wait until it has finished speaking
+  const NativeAudio = window.Audio;
+  let lastAudio = null;
+  window.Audio = function (src) { lastAudio = new NativeAudio(src); return lastAudio; };
+  window.Audio.prototype = NativeAudio.prototype;
+
+  function waitForReplyAudio() {
+    const a = lastAudio;
+    if (!a || a.paused || a.ended) return Promise.resolve();
+    return new Promise(res => {
+      const done = () => { clearTimeout(t); res(); };
+      const t = setTimeout(done, 30000);
+      a.addEventListener('ended', done, { once: true });
+      a.addEventListener('error', done, { once: true });
+      a.addEventListener('pause', done, { once: true });
+    });
+  }
+
+  async function getStream() {
+    if (S.stream && S.stream.active) return S.stream;
+    S.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    return S.stream;
+  }
+  function releaseMic() {
+    if (S.stream) { S.stream.getTracks().forEach(t => t.stop()); S.stream = null; }
+  }
+  function cancelListening() {
+    S.userCancelled = true;
+    if (S.cancel) S.cancel();
+  }
+
+  // record until the speaker stops talking; resolves null if nobody spoke
+  function recordUntilSilence(stream) {
+    return new Promise(resolve => {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      const ctx = new AC();
+      const an = ctx.createAnalyser(); an.fftSize = 1024;
+      ctx.createMediaStreamSource(stream).connect(an);
+      const buf = new Uint8Array(an.fftSize);
+      const chunks = [];
+      const rec = new MediaRecorder(stream);
+      rec.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
+      let heard = false, cancelled = false, calibrated = false;
+      let ambientSum = 0, ambientN = 0, thr = 0.02, lastVoice = 0;
+      const t0 = performance.now();
+      const stop = () => { if (rec.state !== 'inactive') rec.stop(); };
+      S.finish = stop;
+      S.cancel = () => { cancelled = true; stop(); };
+      rec.onstop = () => {
+        clearInterval(timer); ctx.close();
+        S.finish = S.cancel = null;
+        resolve(heard && !cancelled ? new Blob(chunks, { type: rec.mimeType || 'audio/webm' }) : null);
+      };
+      rec.start();
+      const timer = setInterval(() => {
+        an.getByteTimeDomainData(buf);
+        let sum = 0;
+        for (let i = 0; i < buf.length; i++) { const x = (buf[i] - 128) / 128; sum += x * x; }
+        const rms = Math.sqrt(sum / buf.length);
+        const now = performance.now(), t = now - t0;
+        if (t < 400) { ambientSum += rms; ambientN++; return; }          // learn the room noise
+        if (!calibrated) { thr = Math.max(0.02, (ambientSum / Math.max(1, ambientN)) * 2.5); calibrated = true; }
+        if (rms > thr) { heard = true; lastVoice = now; }
+        if (heard && now - lastVoice > SILENCE_MS) stop();
+        else if (!heard && t > START_TIMEOUT_MS) stop();
+        else if (t > MAX_MS) stop();
+      }, 80);
+    });
+  }
+
+  async function listenForAnswer() {
+    if (S.listening) return;
+    S.listening = true; S.userCancelled = false;
+    const mic = q('#mic');
+    try {
+      const stream = await getStream();
+      await new Promise(r => setTimeout(r, 250));                        // let the speaker tail fade
+      setStatus('🎤 Listening… say yes or no (or tap a button)');
+      if (mic) mic.classList.add('rec');
+      const blob = await recordUntilSilence(stream);
+      if (mic) mic.classList.remove('rec');
+      if (!blob) {
+        if (!S.userCancelled) setStatus('No answer heard. Tap the mic or use Yes / No.');
+        releaseMic(); return;
+      }
+      setStatus('Understanding…');
+      const wav = await toWav16k(blob);
+      if (wav.size < 8000) { setStatus('Too short. Tap the mic or use Yes / No.'); releaseMic(); return; }
+      const fd = new FormData();
+      fd.append('audio', wav, 'speech.wav'); fd.append('shop_id', SHOP);
+      const res = await api('/voice/turn', { method: 'POST', body: fd });
+      S.listening = false;
+      window.show(res);                                                  // may listen again
+    } catch (e) {
+      if (mic) mic.classList.remove('rec');
+      setStatus('Could not listen: ' + (e.message || e) + '. Use the mic or the Yes / No buttons.');
+      releaseMic();
+    } finally { S.listening = false; }
+  }
+
+  // wrap the existing show(): after the bot has finished speaking, listen for the answer
+  const origShow = window.show;
+  if (typeof origShow === 'function') {
+    window.show = async function (res) {
+      cancelListening(); lastAudio = null;
+      await origShow(res);
+      await waitForReplyAudio();
+      const needs = res && (res.listen !== undefined ? res.listen
+                    : (res.state === 'confirm' || res.state === 'ask'));
+      if (S.on && needs) listenForAnswer(); else releaseMic();
+    };
+  } else {
+    console.warn('Hands-free: show() not found, hands-free is disabled');
+  }
+
+  // tapping the mic while it is listening = "I am done talking"
+  const mic = q('#mic');
+  if (mic) mic.addEventListener('click', e => {
+    if (S.listening && S.finish) { e.stopImmediatePropagation(); e.preventDefault(); S.finish(); }
+  }, true);
+  // any button press wins over listening
+  ['#yes', '#no', '#send', '#langBtn', '#resetBtn'].forEach(sel => {
+    const el = q(sel);
+    if (el) el.addEventListener('click', () => {
+      cancelListening();
+      if (sel === '#resetBtn' || sel === '#langBtn') releaseMic();
+    }, true);
+  });
+
+  // on/off switch in the header
+  const holder = q('header div') || document.body;
+  const lab = document.createElement('label');
+  lab.style.cssText = 'color:#fff;font-size:13px;margin-right:10px;cursor:pointer';
+  const cb = document.createElement('input');
+  cb.type = 'checkbox'; cb.checked = S.on; cb.style.verticalAlign = 'middle';
+  cb.onchange = () => {
+    S.on = cb.checked;
+    try { localStorage.setItem('arthiq_handsfree', S.on ? 'on' : 'off'); } catch (e) {}
+    if (!S.on) { cancelListening(); releaseMic(); }
+  };
+  lab.append(cb, document.createTextNode(' Hands-free'));
+  holder.prepend(lab);
+})();
+</script>
+</body>
+</html>
